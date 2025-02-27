@@ -5,6 +5,7 @@ import sqlite3
 import telegram
 import requests
 import asyncio
+import openai
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
@@ -14,10 +15,12 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = "@topmathjournals"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 DB_FILE = "math_journals.db"
 
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 def fetch_unpushed_articles():
     conn = sqlite3.connect(DB_FILE)
@@ -54,24 +57,42 @@ def download_image(image_url):
             log("failed to download image from %s"%image_url,l=3)
     return None
 
+def translate_title(title):
+    response = client.chat.completions.create(
+        model="o1",
+        messages=[{"role": "system", "content": "Please translate the following title of a mathematical academic paper into Chinese, ensuring accuracy and clarity. Do not include quotation marks in the response."},
+                  {"role": "user", "content": title}]
+    )
+    return response.choices[0].message.content
+
 async def send_to_telegram(article):
     article_id, journal, title, link, summary, image_url, published_time = article
 
-    summary = summary.replace("\n", " ").replace("### Abstract", "").strip()
+    try:
+        title_cn = translate_title(title)
+    except Exception as e:
+        log("failed to translate title: %s"%e,l=3)
+        title_cn = None
+
+    summary = summary.replace("\n", " ").replace("### Abstract", "").replace("\\(", "").replace("\\)", "").strip()
 
     message = f"_{journal}_\n"
-    message += f"[{title}]({link})\n\n"
-    message += f"{summary}"
+    message += f"[{title}]({link})\n"
+    if title_cn:
+        message += f"{title_cn}\n"
+    message += f"\n{summary}"
 
-    if image_url:
-        try:
-            image_url = image_url.replace("http://", "https://")
-            await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_url, caption=message, parse_mode="Markdown")
-        except Exception as e:
-            log("failed to send photo to telegram: %s"%e,l=2)
-            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
-    else:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
+    # if image_url:
+    #     try:
+    #         image_url = image_url.replace("http://", "https://")
+    #         await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_url, caption=message, parse_mode="Markdown")
+    #     except Exception as e:
+    #         log("failed to send photo to telegram: %s"%e,l=2)
+    #         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
+    # else:
+    #     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
+
+    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
 
     return article_id
 
@@ -93,8 +114,7 @@ async def main():
         return
 
     for article in articles:
-        log("pushing %s to tg"%article[2])
-        input("press enter to continue")
+        log("pushing %s"%article[2])
         article_id = await send_to_telegram(article)
         update_pushed_time(article_id)
         log("pushed %s to telegram"%article[2])
@@ -104,3 +124,6 @@ if __name__ == "__main__":
     # image_url = "http://media.springernature.com/lw685/springer-static/image/art%3A10.1007%2Fs00222-024-01303-y/MediaObjects/222_2024_1303_Fig1_HTML.png"
     # image_path = download_image(image_url)
     # print(image_path)
+
+    # title = "Iterations of symplectomorphisms and $p$ -adic analytic actions on the Fukaya category"
+    # print(translate_title(title))
